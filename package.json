@@ -1,13 +1,17 @@
 {
-  "name": "ai-prediction-server",
+  "name": "prediction-server",
   "version": "1.0.0",
-  "description": "AI server for predicting game results.",
+  "description": "Prediction API server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "author": "ghetvietcode",
+  "keywords": [
+    "api",
+    "express",
+    "prediction"
+  ],
+  "author": "",
   "license": "ISC",
   "dependencies": {
     "axios": "^1.7.2",
