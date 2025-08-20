@@ -6,16 +6,13 @@ const path = require('path');
 const app = express();
 app.use(express.json());
 
-// Cài đặt để JSON trả về có định dạng dọc (pretty-print)
+// Cài đặt này sẽ giúp JSON luôn trả về theo định dạng dọc (đẹp mắt)
 app.set('json spaces', 2);
 
 const PORT = 3000;
-
 // Cấu hình API và các hằng số
 const API_URL = 'https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1';
-// *** LƯU Ý QUAN TRỌNG ***
-// Tăng thời gian cập nhật lên 10 giây (10000ms) để tránh lỗi 429 (Too Many Requests)
-const UPDATE_INTERVAL = 10000;
+const UPDATE_INTERVAL = 10000; // Khuyến nghị 10 giây để tránh lỗi
 const HISTORY_FILE = path.join(__dirname, 'prediction_history.json');
 
 let historyData = [];
@@ -26,9 +23,8 @@ let lastPrediction = {
     do_tin_cay: 0,
     reason: ""
 };
-let modelPredictions = {};
 
-// --- HÀM HỖ TRỢ ---
+// --- CÁC HÀM HỖ TRỢ VÀ THUẬT TOÁN (KHÔNG THAY ĐỔI) ---
 
 function loadPredictionHistory() {
     try {
@@ -61,21 +57,17 @@ async function updateHistory() {
         const res = await axios.get(API_URL);
         if (res?.data?.data?.resultList) {
             historyData = res.data.data.resultList;
-            // Chuyển đổi dữ liệu API về định dạng mới
             historyData = historyData.map(item => ({
-                session: item.gameNum.replace('#', ''), // Xóa dấu #
+                session: item.gameNum.replace('#', ''),
                 result: getResultType(item),
                 totalScore: item.score
             }));
         }
     } catch (e) {
-        // Ghi log lỗi một cách rõ ràng hơn
         if (e.response) {
             console.error(`Lỗi cập nhật: Request failed with status code ${e.response.status}`);
-        } else if (e.request) {
-            console.error('Lỗi cập nhật: No response received from server.');
         } else {
-            console.error('Lỗi cập nhật:', e.message);
+             console.error('Lỗi cập nhật:', e.message);
         }
     }
 }
@@ -86,8 +78,6 @@ function getResultType(session) {
     if (a === b && b === c) return "Bão";
     return session.score >= 11 ? "Tài" : "Xỉu";
 }
-
-// --- CÁC THUẬT TOÁN DỰ ĐOÁN (KHÔNG THAY ĐỔI) ---
 
 function detectStreakAndBreak(history) {
     if (!history || history.length === 0) return { streak: 0, currentResult: null, breakProb: 0.0 };
@@ -322,7 +312,6 @@ function generatePrediction(history) {
     };
 }
 
-
 function predictTopSums(history, prediction, top = 3) {
     const relevantHistory = history.filter(item => item.result === prediction);
 
@@ -352,7 +341,9 @@ function predictTopSums(history, prediction, top = 3) {
     return finalSums;
 }
 
+
 // --- CÁC ROUTE CỦA SERVER ---
+
 app.post('/report-result', (req, res) => {
     const { phien, ket_qua_thuc } = req.body;
     if (!phien || !ket_qua_thuc) {
@@ -368,19 +359,16 @@ app.post('/report-result', (req, res) => {
     res.json({ success: true });
 });
 
-// --- ROUTE ĐÃ ĐƯỢC THAY ĐỔI ---
-app.get('/sicmaboy', async (req, res) => {
-    // Luôn cập nhật lịch sử mỗi khi có yêu cầu để đảm bảo dữ liệu mới nhất
+app.get('/predict', async (req, res) => {
     await updateHistory();
 
     if (historyData.length === 0) {
-        return res.status(503).json({ error: "Không thể lấy được dữ liệu từ API gốc. Vui lòng thử lại sau." });
+        return res.status(503).json({ error: "Không thể lấy được dữ liệu từ API gốc." });
     }
 
     const latest = historyData[0];
     const currentPhien = latest.session;
 
-    // Tạo dự đoán mới nếu phiên đã thay đổi
     if (currentPhien !== lastPrediction.phien) {
         const { prediction, confidence, reason } = generatePrediction(historyData);
         const doan_vi = predictTopSums(historyData, prediction, 3);
@@ -404,8 +392,6 @@ app.get('/sicmaboy', async (req, res) => {
         });
     }
 
-    // Lấy dữ liệu gốc từ API một lần nữa để chắc chắn có facesList
-    // (Vì historyData đã được chuyển đổi)
     let latestOriginal;
     try {
         const originalRes = await axios.get(API_URL);
@@ -413,11 +399,14 @@ app.get('/sicmaboy', async (req, res) => {
     } catch (apiError) {
         return res.status(503).json({ error: "Lỗi khi lấy dữ liệu xúc xắc chi tiết." });
     }
-
+    
+    // Tạo biến faces để code gọn gàng hơn
     const faces = latestOriginal?.facesList || [null, null, null];
 
+    // --- BẮT ĐẦU KHỐI JSON ĐÃ THAY ĐỔI ---
     // Tạo JSON response theo định dạng mới
     res.json({
+        "id": "@ghetvietcode",
         "Phien": currentPhien || "",
         "Xuc_xac_1": faces[0],
         "Xuc_xac_2": faces[1],
@@ -428,12 +417,12 @@ app.get('/sicmaboy', async (req, res) => {
         "dudoan_vi": lastPrediction.doan_vi.join(" | "),
         "do_tin_cay": lastPrediction.do_tin_cay
     });
+    // --- KẾT THÚC KHỐI JSON ĐÃ THAY ĐỔI ---
 });
 
 // --- KHỞI ĐỘNG SERVER ---
 app.listen(PORT, () => {
-    // Log khởi động đã được sửa, không có icon
-    console.log(`Prediction Engine is now live at http://localhost:${PORT}`);
-    updateHistory(); // Chạy lần đầu khi khởi động
-    setInterval(updateHistory, UPDATE_INTERVAL); // Chạy định kỳ
+    console.log(`🤖 Server AI dự đoán chạy tại http://localhost:${PORT}`);
+    updateHistory();
+    setInterval(updateHistory, UPDATE_INTERVAL);
 });
