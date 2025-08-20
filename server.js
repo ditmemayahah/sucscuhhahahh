@@ -9,10 +9,10 @@ app.use(express.json());
 // Cài đặt này sẽ giúp JSON luôn trả về theo định dạng dọc (đẹp mắt)
 app.set('json spaces', 2);
 
-const PORT = 3000;
+const PORT = 8891;
 // Cấu hình API và các hằng số
 const API_URL = 'https://api.wsktnus8.net/v2/history/getLastResult?gameId=ktrng_3979&size=100&tableId=39791215743193&curPage=1';
-const UPDATE_INTERVAL = 10000; // Khuyến nghị 10 giây để tránh lỗi
+const UPDATE_INTERVAL = 5000; // 5 giây
 const HISTORY_FILE = path.join(__dirname, 'prediction_history.json');
 
 let historyData = [];
@@ -24,7 +24,7 @@ let lastPrediction = {
     reason: ""
 };
 
-// --- CÁC HÀM HỖ TRỢ VÀ THUẬT TOÁN (KHÔNG THAY ĐỔI) ---
+// --- HÀM HỖ TRỢ ---
 
 function loadPredictionHistory() {
     try {
@@ -49,6 +49,10 @@ function savePredictionHistory(data) {
 function appendPredictionHistory(record) {
     const all = loadPredictionHistory();
     all.push(record);
+    // Giới hạn lịch sử lưu trong file là 100 bản ghi để file không quá lớn
+    if (all.length > 100) {
+        all.shift();
+    }
     savePredictionHistory(all);
 }
 
@@ -56,19 +60,16 @@ async function updateHistory() {
     try {
         const res = await axios.get(API_URL);
         if (res?.data?.data?.resultList) {
-            historyData = res.data.data.resultList;
-            historyData = historyData.map(item => ({
+            // Lưu trữ cả xúc xắc để dùng cho trang /history
+            historyData = res.data.data.resultList.map(item => ({
                 session: item.gameNum.replace('#', ''),
                 result: getResultType(item),
-                totalScore: item.score
+                totalScore: item.score,
+                faces: item.facesList || [] // Quan trọng: lưu lại xúc xắc
             }));
         }
     } catch (e) {
-        if (e.response) {
-            console.error(`Lỗi cập nhật: Request failed with status code ${e.response.status}`);
-        } else {
-             console.error('Lỗi cập nhật:', e.message);
-        }
+        console.error('Lỗi cập nhật:', e.message);
     }
 }
 
@@ -78,6 +79,8 @@ function getResultType(session) {
     if (a === b && b === c) return "Bão";
     return session.score >= 11 ? "Tài" : "Xỉu";
 }
+
+// --- CÁC THUẬT TOÁN DỰ ĐOÁN (Giữ nguyên không thay đổi) ---
 
 function detectStreakAndBreak(history) {
     if (!history || history.length === 0) return { streak: 0, currentResult: null, breakProb: 0.0 };
@@ -341,25 +344,10 @@ function predictTopSums(history, prediction, top = 3) {
     return finalSums;
 }
 
-
 // --- CÁC ROUTE CỦA SERVER ---
 
-app.post('/report-result', (req, res) => {
-    const { phien, ket_qua_thuc } = req.body;
-    if (!phien || !ket_qua_thuc) {
-        return res.status(400).json({ error: "Thiếu phien hoặc ket_qua_thuc" });
-    }
-
-    const predHist = loadPredictionHistory();
-    const lastPred = predHist.find(p => p.phien === phien);
-    if (!lastPred) return res.status(404).json({ error: "Không tìm thấy dự đoán phiên này" });
-
-    lastPred.ket_qua_thuc = ket_qua_thuc;
-    savePredictionHistory(predHist);
-    res.json({ success: true });
-});
-
-app.get('/predict', async (req, res) => {
+// Endpoint dự đoán chính
+app.get('/sicmaboyy', async (req, res) => {
     await updateHistory();
 
     if (historyData.length === 0) {
@@ -381,48 +369,122 @@ app.get('/predict', async (req, res) => {
             reason: reason
         };
 
+        // Lưu lại dự đoán vào file
         appendPredictionHistory({
-            phien: currentPhien,
+            phien: (parseInt(currentPhien) + 1).toString(), // Dự đoán cho phiên tiếp theo
             du_doan: prediction,
-            doan_vi: doan_vi,
-            do_tin_cay: confidence,
-            reason: reason,
-            ket_qua_thuc: null,
             timestamp: Date.now()
         });
     }
 
-    let latestOriginal;
-    try {
-        const originalRes = await axios.get(API_URL);
-        latestOriginal = originalRes.data.data.resultList[0];
-    } catch (apiError) {
-        return res.status(503).json({ error: "Lỗi khi lấy dữ liệu xúc xắc chi tiết." });
-    }
-    
-    // Tạo biến faces để code gọn gàng hơn
-    const faces = latestOriginal?.facesList || [null, null, null];
+    const faces = latest.faces || [null, null, null];
 
-    // --- BẮT ĐẦU KHỐI JSON ĐÃ THAY ĐỔI ---
-    // Tạo JSON response theo định dạng mới
+    // Tạo JSON response theo định dạng mới bạn yêu cầu
     res.json({
         "id": "@ghetvietcode",
         "Phien": currentPhien || "",
         "Xuc_xac_1": faces[0],
         "Xuc_xac_2": faces[1],
         "Xuc_xac_3": faces[2],
-        "Tong": latestOriginal?.score || 0,
-        "Ket_qua": getResultType(latestOriginal) || "",
+        "Tong": latest.totalScore || 0,
+        "Ket_qua": latest.result || "",
         "du_doan": lastPrediction.du_doan,
         "dudoan_vi": lastPrediction.doan_vi.join(" | "),
         "do_tin_cay": lastPrediction.do_tin_cay
     });
-    // --- KẾT THÚC KHỐI JSON ĐÃ THAY ĐỔI ---
 });
 
+// Endpoint xem lịch sử
+app.get('/history', async (req, res) => {
+    await updateHistory(); // Lấy dữ liệu mới nhất
+    const predHistory = loadPredictionHistory().reverse(); // Đảo ngược để xem cái mới nhất trước
+
+    let html = `
+    <!DOCTYPE html>
+    <html lang="vi">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Lịch Sử Dự Đoán</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
+            h1 { text-align: center; color: #bb86fc; }
+            table { width: 100%; max-width: 800px; margin: 20px auto; border-collapse: collapse; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+            th, td { padding: 12px 15px; text-align: center; border: 1px solid #333; }
+            thead { background-color: #bb86fc; color: #121212; }
+            tbody tr:nth-child(even) { background-color: #1e1e1e; }
+            tbody tr:hover { background-color: #333; }
+            .status { font-weight: bold; }
+            .correct { color: #03dac6; }
+            .incorrect { color: #cf6679; }
+            .waiting { color: #f0e68c; }
+        </style>
+    </head>
+    <body>
+        <h1>📜 Lịch Sử Dự Đoán 📜</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Phiên</th>
+                    <th>Kết Quả Thực Tế</th>
+                    <th>Xúc Xắc</th>
+                    <th>Tổng</th>
+                    <th>Dự Đoán Của AI</th>
+                    <th>Trạng Thái</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    for (const pred of predHistory) {
+        // Tìm kết quả thực tế từ historyData đã được cập nhật
+        const actualResult = historyData.find(h => h.session === pred.phien);
+
+        if (actualResult) {
+            const status = pred.du_doan === actualResult.result ? 'Đúng' : 'Sai';
+            const statusClass = pred.du_doan === actualResult.result ? 'correct' : 'incorrect';
+            
+            html += `
+            <tr>
+                <td>#${pred.phien}</td>
+                <td>${actualResult.result}</td>
+                <td>${actualResult.faces.join(' - ')}</td>
+                <td>${actualResult.totalScore}</td>
+                <td>${pred.du_doan}</td>
+                <td class="status ${statusClass}">${status}</td>
+            </tr>
+            `;
+        } else {
+            // Có thể phiên này chưa có kết quả
+            html += `
+            <tr>
+                <td>#${pred.phien}</td>
+                <td>Chờ...</td>
+                <td>Chờ...</td>
+                <td>Chờ...</td>
+                <td>${pred.du_doan}</td>
+                <td class="status waiting">Chờ kết quả</td>
+            </tr>
+            `;
+        }
+    }
+
+    html += `
+            </tbody>
+        </table>
+    </body>
+    </html>
+    `;
+
+    res.send(html);
+});
+
+
 // --- KHỞI ĐỘNG SERVER ---
-app.listen(PORT, () => {
-    console.log(`🤖 Server AI dự đoán chạy tại http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🤖 Server AI dự đoán chạy tại port ${PORT}`);
+    console.log(`🔗 Link dự đoán: http://localhost:${PORT}/sicmaboyy`);
+    console.log(`📜 Link lịch sử: http://localhost:${PORT}/history`);
     updateHistory();
     setInterval(updateHistory, UPDATE_INTERVAL);
 });
